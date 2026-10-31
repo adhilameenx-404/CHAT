@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeChat</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1d1d1b;--mute:#6b6a64;--line:#e2e0d8;--acc:#3d5afe;--accink:#fff;--them:#ecebe4;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#212120;--ink:#f0efe9;--mute:#9b9a92;--line:#34332f;--acc:#5a6cff;--them:#2d2c29;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:20px 16px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:22px;margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.lbl{font-size:13px;color:var(--mute);margin:0 0 6px}
+.code{font:700 40px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.12em}
+.row{display:flex;gap:8px}
+input{flex:1;min-width:0;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+button{padding:11px 16px;border:0;border-radius:10px;background:var(--acc);color:var(--accink);font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:default}
+#join{text-transform:uppercase;letter-spacing:.1em}
+#err{color:#d33;font-size:14px;min-height:20px;margin:6px 0 0}
+#status{font-size:14px;color:var(--mute);display:flex;align-items:center;gap:8px;margin:0 0 10px}
+.dot{width:9px;height:9px;border-radius:50%;background:#bbb}.dot.on{background:#2bb673}
+#log{height:min(46vh,380px);overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px 2px 10px}
+.m{max-width:80%;padding:8px 12px;border-radius:14px;background:var(--them);overflow-wrap:anywhere}
+.m.me{align-self:flex-end;background:var(--acc);color:var(--accink)}
+.m small{display:block;font-size:11px;opacity:.7}
+.empty{color:var(--mute);font-size:14px;text-align:center;margin:auto}
+</style>
+</head>
+<body>
+<main>
+  <h1>CodeChat</h1>
+  <div class="card">
+    <p class="lbl">Your code: share it with someone</p>
+    <div class="row" style="align-items:center;justify-content:space-between">
+      <div class="code" id="mycode">······</div>
+      <button class="ghost" id="copy">Copy</button>
+    </div>
+  </div>
+  <div class="card">
+    <p class="lbl">Have a friend’s code? Enter it to connect</p>
+    <div class="row">
+      <input id="join" maxlength="6" placeholder="ABC123" autocomplete="off" spellcheck="false">
+      <button id="go" disabled>Connect</button>
+    </div>
+    <p id="err"></p>
+  </div>
+  <div class="card">
+    <p id="status"><span class="dot" id="dot"></span><span id="stext">Connecting…</span></p>
+    <div id="log"><p class="empty">No messages yet.</p></div>
+    <div class="row">
+      <input id="msg" maxlength="500" placeholder="Type a message" autocomplete="off" disabled>
+      <button id="send" disabled>Send</button>
+    </div>
+    <p style="margin:10px 0 0"><button class="ghost" id="leave" hidden>Leave chat</button></p>
+  </div>
+</main>
+<script>
+(function(){
+var $=function(id){return document.getElementById(id)};
+var ws=null,myCode="",peer=null,retry=0;
+var re=/^[A-Za-z]{3}[0-9]{3}$/;
+
+function saved(){try{return localStorage.getItem("cc_code")||""}catch(e){return ""}}
+function keep(c){try{localStorage.setItem("cc_code",c)}catch(e){}}
+function status(on,t){$("dot").className="dot"+(on?" on":"");$("stext").textContent=t}
+function clearLog(){var l=$("log");l.innerHTML="";var p=document.createElement("p");p.className="empty";p.textContent="No messages yet.";l.appendChild(p)}
+function add(text,me){
+  var l=$("log"),e=l.querySelector(".empty");if(e)e.remove();
+  var b=document.createElement("div");b.className="m"+(me?" me":"");
+  var s=document.createElement("small");s.textContent=me?"You":(peer||"Friend");
+  var x=document.createElement("span");x.textContent=text;
+  b.appendChild(s);b.appendChild(x);l.appendChild(b);l.scrollTop=l.scrollHeight;
+}
+function ui(){
+  var inChat=!!peer;
+  $("msg").disabled=!inChat;$("send").disabled=!inChat;$("leave").hidden=!inChat;
+  $("go").disabled=!(ws&&ws.readyState===1&&myCode);
+  if(inChat)status(true,"Connected with "+peer);
+  else if(ws&&ws.readyState===1)status(true,"Online. Waiting for someone to enter your code…");
+}
+function open(){
+  var proto=location.protocol==="https:"?"wss://":"ws://";
+  ws=new WebSocket(proto+location.host);
+  ws.onopen=function(){retry=0;ws.send(JSON.stringify({type:"hello",code:saved()}))};
+  ws.onmessage=function(ev){
+    var m;try{m=JSON.parse(ev.data)}catch(e){return}
+    if(m.type==="code"){myCode=m.code;keep(myCode);$("mycode").textContent=myCode;ui()}
+    else if(m.type==="connected"){peer=m.code;clearLog();$("err").textContent="";ui()}
+    else if(m.type==="msg"&&typeof m.text==="string")add(m.text.slice(0,500),false);
+    else if(m.type==="peer_left"){add("Your friend left the chat.",false);peer=null;ui()}
+    else if(m.type==="left"){peer=null;clearLog();ui()}
+    else if(m.type==="error")$("err").textContent=String(m.text||"Error");
+  };
+  ws.onclose=function(){
+    peer=null;ui();status(false,"Disconnected. Reconnecting…");$("go").disabled=true;
+    setTimeout(open,Math.min(1000*Math.pow(2,retry++),10000));
+  };
+}
+$("copy").onclick=function(){
+  try{navigator.clipboard.writeText(myCode);$("copy").textContent="Copied"}catch(e){$("copy").textContent="Select it"}
+  setTimeout(function(){$("copy").textContent="Copy"},1500);
+};
+$("go").onclick=function(){
+  var v=$("join").value.trim();$("err").textContent="";
+  if(!re.test(v)){$("err").textContent="A code is 3 letters followed by 3 numbers, like ABC123.";return}
+  if(v.toUpperCase()===myCode){$("err").textContent="That’s your own code. Share it with someone else.";return}
+  ws.send(JSON.stringify({type:"connect",code:v}));
+};
+$("join").addEventListener("keydown",function(e){if(e.key==="Enter")$("go").click()});
+$("leave").onclick=function(){ws.send(JSON.stringify({type:"leave"}))};
+function send(){
+  var t=$("msg").value.trim();if(!t||!peer)return;
+  ws.send(JSON.stringify({type:"msg",text:t}));add(t,true);$("msg").value="";
+}
+$("send").onclick=send;
+$("msg").addEventListener("keydown",function(e){if(e.key==="Enter")send()});
+open();
+})();
+</script>
+</body>
+</html>
